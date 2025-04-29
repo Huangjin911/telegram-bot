@@ -95,7 +95,7 @@ async def set_bot_commands(application: Application):
 
 # 启动命令
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("欢迎体验分分彩机器人！点击菜单查看玩法：\n/play sum 4~17 [积分] 猜总和\n/play triple 1~6/any [积分] 三同号\n/play pair X-X-Y/any [积分] 二同号\n/play single 1~6 [积分] 猜点数\n/play size big/small [积分] 总和大小\n/play parity odd/even [积分] 总和单双\n/balance 查看积分\n/achievements 查看成就\n/leaderboard 排行榜\n/addpoints @用户名 [积分] 管理员加分\n/addallpoints [积分] 给所有人加分")
+    await update.message.reply_text("欢迎体验分分彩机器人！点击菜单（📋）查看玩法：\n/play sum 4~17 [积分] 猜总和\n/play triple 1~6/any [积分] 三同号\n/play pair X-X-Y/any [积分] 二同号\n/play single 1~6 [积分] 猜点数\n/play size big/small [积分] 总和大小\n/play parity odd/even [积分] 总和单双\n/balance 查看积分\n/achievements 查看成就\n/leaderboard 排行榜\n/addpoints @用户名 [积分] 管理员加分\n/addallpoints [积分] 给所有人加分")
 
 # 发言加积分
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
