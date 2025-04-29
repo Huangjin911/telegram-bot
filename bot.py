@@ -1,4 +1,4 @@
-from telegram import Update, Dice
+from telegram import Update, Dice, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import random
 import sqlite3
@@ -71,14 +71,31 @@ def check_achievements(user_id, trigger_type):
 
 # 检查管理员
 async def is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-    admins = await context.bot.get_chat_administrators(chat_id)
-    return any(admin.user.id == user_id for admin in admins)
+    try:
+        user_id = update.effective_user.id
+        chat_id = update.effective_chat.id
+        admins = await context.bot.get_chat_administrators(chat_id)
+        return any(admin.user.id == user_id for admin in admins)
+    except Exception as e:
+        await update.message.reply_text(f"检查管理员权限失败：{str(e)}")
+        return False
+
+# 设置指令菜单
+async def set_bot_commands(application: Application):
+    commands = [
+        BotCommand("start", "开始使用，查看玩法"),
+        BotCommand("play", "参与游戏：和值、三同号、二同号、单骰、大小单双"),
+        BotCommand("balance", "查看积分"),
+        BotCommand("achievements", "查看成就"),
+        BotCommand("leaderboard", "查看排行榜"),
+        BotCommand("addpoints", "管理员：为用户加分"),
+        BotCommand("addallpoints", "管理员：为所有人加分")
+    ]
+    await application.bot.set_my_commands(commands)
 
 # 启动命令
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("欢迎体验分分彩机器人！\n/play [数字] [积分] 参与游戏\n/balance 查看积分\n/achievements 查看成就\n/leaderboard 排行榜")
+    await update.message.reply_text("欢迎体验分分彩机器人！点击菜单查看玩法：\n/play sum 4~17 [积分] 猜总和\n/play triple 1~6/any [积分] 三同号\n/play pair X-X-Y/any [积分] 二同号\n/play single 1~6 [积分] 猜点数\n/play size big/small [积分] 总和大小\n/play parity odd/even [积分] 总和单双\n/balance 查看积分\n/achievements 查看成就\n/leaderboard 排行榜\n/addpoints @用户名 [积分] 管理员加分\n/addallpoints [积分] 给所有人加分")
 
 # 发言加积分
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -100,45 +117,179 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(msg)
     conn.close()
 
-# 分分彩游戏
+# 分分彩游戏（3个骰子）
 async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     args = context.args
-    if len(args) != 2:
-        await update.message.reply_text("格式：/play [3位数字] [积分]，如 /play 123 10")
+    if len(args) != 3:
+        await update.message.reply_text("格式：/play [玩法] [参数] [积分]\n示例：/play sum 4 10 或 /play triple 6 10")
         return
+    mode = args[0].lower()
+    bet = args[1].lower()
     try:
-        bet_number = int(args[0])
-        points = int(args[1])
-        if not (0 <= bet_number <= 999 and points > 0):
+        points = int(args[2])
+        if points <= 0:
             raise ValueError
     except ValueError:
-        await update.message.reply_text("请输入有效3位数字（000-999）和正整数积分！")
+        await update.message.reply_text("积分需为正整数！")
         return
     current_points = get_points(user_id)
     if points > current_points:
         await update.message.reply_text("积分不足！")
         return
-    result = random.randint(0, 999)
+
+    # 生成3个骰子
+    dice1 = random.randint(1, 6)
+    dice2 = random.randint(1, 6)
+    dice3 = random.randint(1, 6)
+    total = dice1 + dice2 + dice3
+    result = [dice1, dice2, dice3]
+    # 发送3个骰子动画
     await update.message.reply_dice(emoji="🎲")
+    await update.message.reply_dice(emoji="🎲")
+    await update.message.reply_dice(emoji="🎲")
+    
     update_points(user_id, update.effective_user.username, -points)
     conn = sqlite3.connect("points.db")
     c = conn.cursor()
-    if bet_number == result:
-        winnings = points * 10
-        update_points(user_id, update.effective_user.username, winnings)
-        c.execute("UPDATE users SET consecutive_wins = consecutive_wins + 1 WHERE user_id = ?", (user_id,))
-        if winnings >= 500:
-            check_achievements(user_id, "big_win")
-        await update.message.reply_text(f"🎉 恭喜！结果：{result:03d}，完全匹配，赢得 {winnings} 积分！")
-    elif str(bet_number)[:2] == str(result)[:2]:
-        winnings = points * 2
-        update_points(user_id, update.effective_user.username, winnings)
-        c.execute("UPDATE users SET consecutive_wins = 0 WHERE user_id = ?", (user_id,))
-        await update.message.reply_text(f"👍 结果：{result:03d}，前两位匹配，赢得 {winnings} 积分！")
+    
+    if mode == "size":
+        if bet not in ["big", "small"]:
+            await update.message.reply_text("请猜 big 或 small！")
+            return
+        is_big = total >= 11
+        result_str = "big" if is_big else "small"
+        await update.message.reply_text(f"🎲 结果：{dice1}-{dice2}-{dice3} (总和 {total})，{'大' if is_big else '小'}")
+        if bet == result_str:
+            winnings = int(points * 1.8)
+            update_points(user_id, update.effective_user.username, winnings)
+            await update.message.reply_text(f"🎉 猜对！赢得 {winnings} 积分！")
+            if winnings >= 500:
+                check_achievements(user_id, "big_win")
+        else:
+            await update.message.reply_text(f"😅 猜错！扣除 {points} 积分。")
+    
+    elif mode == "parity":
+        if bet not in ["odd", "even"]:
+            await update.message.reply_text("请猜 odd 或 even！")
+            return
+        is_even = total % 2 == 0
+        result_str = "even" if is_even else "odd"
+        await update.message.reply_text(f"🎲 结果：{dice1}-{dice2}-{dice3} (总和 {total})，{'双' if is_even else '单'}")
+        if bet == result_str:
+            winnings = int(points * 1.8)
+            update_points(user_id, update.effective_user.username, winnings)
+            await update.message.reply_text(f"🎉 猜对！赢得 {winnings} 积分！")
+            if winnings >= 500:
+                check_achievements(user_id, "big_win")
+        else:
+            await update.message.reply_text(f"😅 猜错！扣除 {points} 积分。")
+    
+    elif mode == "sum":
+        try:
+            bet_sum = int(bet)
+            if bet_sum < 3 or bet_sum > 18:
+                raise ValueError
+        except ValueError:
+            await update.message.reply_text("总和需为 3-18 的整数！")
+            return
+        await update.message.reply_text(f"🎲 结果：{dice1}-{dice2}-{dice3} (总和 {total})")
+        if bet_sum == total:
+            odds = {4: 50, 17: 50, 5: 18, 16: 18, 6: 14, 15: 14, 7: 12, 14: 12, 8: 8, 13: 8, 9: 6, 12: 6, 10: 6, 11: 6}
+            winnings = points * odds.get(total, 6)
+            update_points(user_id, update.effective_user.username, winnings)
+            await update.message.reply_text(f"🎉 猜对总和！赢得 {winnings} 积分！")
+            if winnings >= 500:
+                check_achievements(user_id, "big_win")
+        else:
+            await update.message.reply_text(f"😅 猜错！扣除 {points} 积分。")
+    
+    elif mode == "triple":
+        is_triple = dice1 == dice2 == dice3
+        await update.message.reply_text(f"🎲 结果：{dice1}-{dice2}-{dice3}")
+        if bet == "any":
+            if is_triple:
+                winnings = points * 30
+                update_points(user_id, update.effective_user.username, winnings)
+                await update.message.reply_text(f"🎉 三同号通选中奖！赢得 {winnings} 积分！")
+                if winnings >= 500:
+                    check_achievements(user_id, "big_win")
+            else:
+                await update.message.reply_text(f"😅 未开豹子！扣除 {points} 积分。")
+        else:
+            try:
+                bet_num = int(bet)
+                if bet_num < 1 or bet_num > 6:
+                    raise ValueError
+            except ValueError:
+                await update.message.reply_text("三同号需为 1-6 或 any！")
+                return
+            if is_triple and dice1 == bet_num:
+                winnings = points * 150
+                update_points(user_id, update.effective_user.username, winnings)
+                c.execute("UPDATE users SET consecutive_wins = consecutive_wins + 1 WHERE user_id = ?", (user_id,))
+                await update.message.reply_text(f"🎉 三同号单选中奖！赢得 {winnings} 积分！")
+                if winnings >= 500:
+                    check_achievements(user_id, "big_win")
+            else:
+                c.execute("UPDATE users SET consecutive_wins = 0 WHERE user_id = ?", (user_id,))
+                await update.message.reply_text(f"😅 未中！扣除 {points} 积分。")
+    
+    elif mode == "pair":
+        await update.message.reply_text(f"🎲 结果：{dice1}-{dice2}-{dice3}")
+        if bet == "any":
+            if len(set(result)) == 2:
+                winnings = points * 5
+                update_points(user_id, update.effective_user.username, winnings)
+                await update.message.reply_text(f"🎉 二同号复选中奖！赢得 {winnings} 积分！")
+                if winnings >= 500:
+                    check_achievements(user_id, "big_win")
+            else:
+                await update.message.reply_text(f"😅 未开对子！扣除 {points} 积分。")
+        else:
+            try:
+                bet_numbers = [int(x) for x in bet.split("-")]
+                if len(bet_numbers) != 3 or not all(1 <= x <= 6 for x in bet_numbers):
+                    raise ValueError
+            except ValueError:
+                await update.message.reply_text("二同号需为 X-X-Y 格式，如 1-1-2！")
+                return
+            sorted_bet = sorted(bet_numbers)
+            sorted_result = sorted(result)
+            if sorted_bet == sorted_result and len(set(bet_numbers)) == 2:
+                winnings = points * 25
+                update_points(user_id, update.effective_user.username, winnings)
+                c.execute("UPDATE users SET consecutive_wins = consecutive_wins + 1 WHERE user_id = ?", (user_id,))
+                await update.message.reply_text(f"🎉 二同号单选中奖！赢得 {winnings} 积分！")
+                if winnings >= 500:
+                    check_achievements(user_id, "big_win")
+            else:
+                c.execute("UPDATE users SET consecutive_wins = 0 WHERE user_id = ?", (user_id,))
+                await update.message.reply_text(f"😅 未中！扣除 {points} 积分。")
+    
+    elif mode == "single":
+        try:
+            bet_num = int(bet)
+            if bet_num < 1 or bet_num > 6:
+                raise ValueError
+        except ValueError:
+            await update.message.reply_text("猜点数需为 1-6 的整数！")
+            return
+        count = result.count(bet_num)
+        await update.message.reply_text(f"🎲 结果：{dice1}-{dice2}-{dice3}")
+        if count > 0:
+            winnings = points * count
+            update_points(user_id, update.effective_user.username, winnings)
+            await update.message.reply_text(f"🎉 猜中 {count} 次！赢得 {winnings} 积分！")
+            if winnings >= 500:
+                check_achievements(user_id, "big_win")
+        else:
+            await update.message.reply_text(f"😅 未猜中！扣除 {points} 积分。")
+    
     else:
-        c.execute("UPDATE users SET consecutive_wins = 0 WHERE user_id = ?", (user_id,))
-        await update.message.reply_text(f"😅 结果：{result:03d}，未中奖，扣除 {points} 积分。")
+        await update.message.reply_text("玩法错误！请用 size, parity, sum, triple, pair 或 single。")
+        return
+    
     conn.commit()
     conn.close()
     await update.message.reply_text(f"当前积分：{get_points(user_id)}")
@@ -166,14 +317,14 @@ async def achievements(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message += f"{name}: {'已解锁' if unlocked else '未解锁'}\n"
     await update.message.reply_text(message)
 
-# 管理员加分
+# 管理员给单一用户加分
 async def add_points(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_admin(update, context):
         await update.message.reply_text("仅管理员可使用此命令！")
         return
     args = context.args
     if len(args) != 2 or not args[0].startswith("@"):
-        await update.message.reply_text("格式：/addpoints @用户名 积分数")
+        await update.message.reply_text("格式：/addpoints @用户名 积分数\n示例：/addpoints @user 100")
         return
     try:
         points = int(args[1])
@@ -188,12 +339,41 @@ async def add_points(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c.execute("SELECT user_id FROM users WHERE username = ?", (username,))
     user = c.fetchone()
     if not user:
-        await update.message.reply_text("用户不存在！")
+        await update.message.reply_text(f"用户 @{username} 不存在！请确认用户已发言或参与游戏。")
         conn.close()
         return
     update_points(user[0], username, points)
     conn.close()
     await update.message.reply_text(f"已为 @{username} 添加 {points} 积分！")
+
+# 管理员给所有人加分
+async def add_all_points(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_admin(update, context):
+        await update.message.reply_text("仅管理员可使用此命令！")
+        return
+    args = context.args
+    if len(args) != 1:
+        await update.message.reply_text("格式：/addallpoints 积分数\n示例：/addallpoints 50")
+        return
+    try:
+        points = int(args[0])
+        if points > 1000 or points < 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("积分需为0-1000的整数！")
+        return
+    conn = sqlite3.connect("points.db")
+    c = conn.cursor()
+    c.execute("SELECT user_id, username FROM users")
+    users = c.fetchall()
+    if not users:
+        await update.message.reply_text("暂无用户记录！")
+        conn.close()
+        return
+    for user_id, username in users:
+        update_points(user_id, username, points)
+    conn.close()
+    await update.message.reply_text(f"已为所有 {len(users)} 名用户各添加 {points} 积分！")
 
 # 排行榜
 async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -213,13 +393,18 @@ async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     init_db()
     app = Application.builder().token("8137040207:AAH_MLmXOol3sQLNmOgfnabrywb4clZaVLg").build()
+    # 设置指令菜单
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("play", play))
     app.add_handler(CommandHandler("balance", balance))
     app.add_handler(CommandHandler("achievements", achievements))
     app.add_handler(CommandHandler("addpoints", add_points))
+    app.add_handler(CommandHandler("addallpoints", add_all_points))
     app.add_handler(CommandHandler("leaderboard", leaderboard))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+    # 异步设置命令菜单
+    import asyncio
+    asyncio.run(set_bot_commands(app))
     app.run_polling()
 
 if __name__ == "__main__":
